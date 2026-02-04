@@ -4,57 +4,60 @@
 Build an Opal Tool for Optimizely Connect Platform (OCP) that integrates with Sanity CMS for content operations and RAG (Retrieval-Augmented Generation) capabilities.
 
 ## Repository
-- **GitHub**: https://github.com/[username]/opal-sanity-tool
+- **GitHub**: https://github.com/egandalf/opal-sanity-tool
 - **Template Reference**: https://github.com/egandalf/opal_ocp_template
 
 ---
 
 ## Phase 1: Project Setup
-- [ ] Clone/adapt opal_ocp_template structure
-- [ ] Configure `app.yml` with proper app metadata
-- [ ] Set up `package.json` with Sanity dependencies
-- [ ] Configure TypeScript (`tsconfig.json`)
-- [ ] Create settings form for Sanity connection (`forms/settings.yml`)
-  - [ ] Sanity Project ID field
-  - [ ] Sanity Dataset field
-  - [ ] Sanity API Token field (read/write)
-  - [ ] API Version configuration
+- [x] Clone/adapt opal_ocp_template structure
+- [x] Configure `app.yml` with proper app metadata
+- [x] Set up `package.json` with Sanity dependencies
+- [x] Configure TypeScript (`tsconfig.json`)
+- [x] Create settings form for Sanity connection (`forms/settings.yml`)
+  - [x] Sanity Project ID field
+  - [x] Sanity Dataset field
+  - [x] Sanity API Token field (read/write)
+  - [x] API Version configuration
+  - [x] CDN usage toggle
+  - [x] Default document types
+  - [x] RAG settings (max results, chunk size)
 
 ---
 
 ## Phase 2: Core Sanity CMS Operations
 
 ### Content Operations Tools
-- [ ] **Create Content** - Create new documents in Sanity
+- [x] **Create Content** - Create new documents in Sanity
   - Parameters: document type, content fields, draft/published state
   - Returns: created document ID and status
 
-- [ ] **Update Content** - Update existing documents
+- [x] **Update Content** - Update existing documents
   - Parameters: document ID, fields to update, patch operations
   - Returns: updated document confirmation
 
-- [ ] **Delete Content** - Remove documents from Sanity
+- [x] **Delete Content** - Remove documents from Sanity
   - Parameters: document ID, soft delete vs permanent
   - Returns: deletion confirmation
 
-- [ ] **Publish Content** - Publish draft documents
+- [x] **Publish Content** - Publish draft documents
   - Parameters: document ID or array of IDs
   - Returns: publish status
 
-- [ ] **Unpublish Content** - Revert to draft state
+- [x] **Unpublish Content** - Revert to draft state
   - Parameters: document ID
   - Returns: unpublish status
 
 ### Query Operations
-- [ ] **Get Document** - Fetch single document by ID
+- [x] **Get Document** - Fetch single document by ID
   - Parameters: document ID, projection fields
   - Returns: document data
 
-- [ ] **Query Documents** - GROQ query execution
+- [x] **Query Documents** - GROQ query execution
   - Parameters: GROQ query string, parameters
   - Returns: query results
 
-- [ ] **List Document Types** - Get available schema types
+- [x] **List Document Types** - Get available schema types
   - Returns: array of document types with schemas
 
 ---
@@ -62,7 +65,7 @@ Build an Opal Tool for Optimizely Connect Platform (OCP) that integrates with Sa
 ## Phase 3: RAG Integration
 
 ### Search & Retrieval
-- [ ] **Search Content** - Full-text search across Sanity content
+- [x] **Search Content** - Full-text search across Sanity content
   - Parameters: search query, filters, document types
   - Returns: ranked search results with relevance scores
 

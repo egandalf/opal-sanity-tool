@@ -1,0 +1,77 @@
+sections:
+  - key: sanity_connection
+    label: Sanity Connection
+    elements:
+      - key: project_id
+        label: Project ID
+        type: text
+        help: Your Sanity project ID. Found in your Sanity project settings or sanity.config.ts file.
+        required: true
+
+      - key: dataset
+        label: Dataset
+        type: text
+        help: The Sanity dataset to use (e.g., "production", "staging", "development").
+        required: true
+
+      - key: api_token
+        label: API Token
+        type: password
+        help: Sanity API token with read/write permissions. Generate one at manage.sanity.io under API settings.
+        required: true
+
+      - key: api_version
+        label: API Version
+        type: text
+        help: Sanity API version in YYYY-MM-DD format (e.g., "2024-01-01"). Defaults to "2024-01-01" if not specified.
+        required: false
+
+  - key: content_settings
+    label: Content Settings
+    elements:
+      - key: use_cdn
+        label: Use CDN
+        type: select
+        help: Whether to use Sanity's CDN for read operations. CDN is faster but may have slight delays for fresh content.
+        options:
+          - value: "true"
+            text: Yes - Use CDN (faster, recommended for production)
+          - value: "false"
+            text: No - Direct API (always fresh, slower)
+
+      - key: default_document_types
+        label: Default Document Types
+        type: text
+        help: Comma-separated list of document types to include in searches by default (e.g., "post,page,article"). Leave empty to search all types.
+        required: false
+
+  - key: rag_settings
+    label: RAG Settings
+    elements:
+      - key: max_search_results
+        label: Max Search Results
+        type: select
+        help: Maximum number of documents to return from search queries.
+        options:
+          - value: "10"
+            text: "10 results"
+          - value: "25"
+            text: "25 results"
+          - value: "50"
+            text: "50 results"
+          - value: "100"
+            text: "100 results"
+
+      - key: content_chunk_size
+        label: Content Chunk Size
+        type: select
+        help: Maximum size of content chunks for RAG context. Smaller chunks are more precise, larger chunks provide more context.
+        options:
+          - value: "500"
+            text: "500 characters (precise)"
+          - value: "1000"
+            text: "1000 characters (balanced)"
+          - value: "2000"
+            text: "2000 characters (contextual)"
+          - value: "4000"
+            text: "4000 characters (comprehensive)"

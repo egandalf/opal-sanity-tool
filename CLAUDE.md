@@ -120,15 +120,17 @@ ocp app install       # Install for testing
 
 ## Configuration Files
 
-### app.yml Placeholders
-Replace these in `app.yml`:
-- `{{APP_ID}}` - Unique app identifier (e.g., `sanity-content-tool`)
-- `{{APP_DISPLAY_NAME}}` - Display name (e.g., `Sanity Content Tool`)
-- `{{APP_SUMMARY}}` - Brief description
-- `{{GITHUB_USERNAME}}` - Your GitHub username
-- `{{REPO_NAME}}` - Repository name
-- `{{CONTACT_EMAIL}}` - Support email
-- `{{TOOL_DESCRIPTION}}` - Tool description for marketplace
+### app.yml (Configured)
+- **app_id**: `sanity-content-tool`
+- **display_name**: `Sanity Content Tool`
+- **vendor**: `optimizely`
+- **runtime**: `node22`
+- **entry_point**: `SanityToolFunction`
+
+### forms/settings.yml Sections
+1. **sanity_connection** - Project ID, Dataset, API Token, API Version
+2. **content_settings** - CDN usage, Default document types
+3. **rag_settings** - Max search results, Content chunk size
 
 ### forms/settings.yml Notes
 - Use `help:` not `helpText:` for field descriptions
@@ -158,6 +160,21 @@ Replace these in `app.yml`:
 - Mock Sanity API responses for unit tests
 - Use Sanity's mock client for integration tests
 - Test all error handling paths
+
+## Available Tools (Implemented)
+
+| Tool | Description |
+|------|-------------|
+| `get_tool_info` | Returns tool version and capabilities |
+| `get_document` | Fetch a single document by ID |
+| `query_documents` | Execute GROQ queries |
+| `create_document` | Create new documents |
+| `update_document` | Update existing documents |
+| `delete_document` | Delete documents |
+| `publish_document` | Publish draft documents |
+| `unpublish_document` | Unpublish documents to draft |
+| `search_content` | Full-text search for RAG |
+| `get_document_types` | List available document types |
 
 ## Resources
 - [Sanity Documentation](https://www.sanity.io/docs)

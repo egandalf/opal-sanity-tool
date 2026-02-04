@@ -1,0 +1,20 @@
+meta:
+  app_id: sanity-content-tool
+  display_name: Sanity Content Tool
+  version: 1.0.0-dev.1
+  vendor: optimizely
+  summary: Opal Tool for Sanity CMS content operations including CRUD, publish, and RAG capabilities
+  support_url: https://github.com/egandalf/opal-sanity-tool
+  contact_email: james.stout@optimizely.com
+  categories:
+    - Opal
+  availability:
+    - all
+
+runtime: node22
+
+functions:
+  opal_tool:
+    entry_point: SanityToolFunction
+    description: Sanity CMS integration tool providing content operations (create, read, update, delete, publish) and search capabilities for RAG
+    opal_tool: true

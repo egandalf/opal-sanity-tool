@@ -1,0 +1,34 @@
+{
+  "name": "sanity-content-tool",
+  "version": "1.0.0-dev.1",
+  "description": "Opal Tool for OCP integrating with Sanity CMS for content operations and RAG",
+  "main": "dist/index.js",
+  "scripts": {
+    "clean": "rimraf dist",
+    "compile": "tsc",
+    "copy-config": "copyfiles -u 0 app.yml \"forms/**/*\" \"assets/**/*\" dist/",
+    "build": "npm run clean && npm run compile && npm run copy-config",
+    "lint": "echo 'No linter configured'",
+    "test": "echo 'No tests configured'",
+    "validate": "npm run build && cross-env LOG_LEVEL=never node node_modules/@zaiusinc/app-sdk/dist/app/validation/runValidation.js"
+  },
+  "dependencies": {
+    "@optimizely-opal/opal-tool-ocp-sdk": "1.0.0",
+    "@sanity/client": "^6.24.1",
+    "@zaiusinc/app-sdk": "3.2.0",
+    "@zaiusinc/node-sdk": "3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "copyfiles": "^2.4.1",
+    "cross-env": "^7.0.3",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "resolutions": {
+    "grpc-boom": "3.0.11"
+  }
+}
