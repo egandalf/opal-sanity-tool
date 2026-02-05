@@ -213,6 +213,51 @@ export class SanityToolFunction extends ToolFunction {
   }
 
   /**
+   * Helper: Look up the actual field type for a given document type and field name
+   * by sampling existing documents. Returns the inferred type string.
+   */
+  private async getFieldTypeFromSchema(
+    client: SanityClient,
+    documentType: string,
+    fieldName: string
+  ): Promise<string> {
+    try {
+      const samples = await client.fetch(
+        `*[_type == $type && defined(${fieldName})][0...3].${fieldName}`,
+        { type: documentType }
+      ) as unknown[];
+
+      if (samples && samples.length > 0) {
+        return this.inferFieldType(samples[0]);
+      }
+      return 'unknown';
+    } catch (e) {
+      logger.warn(`Could not infer field type for ${documentType}.${fieldName}:`, e);
+      return 'unknown';
+    }
+  }
+
+  /**
+   * Helper: Resolve a field value, auto-converting to Portable Text only if the
+   * schema actually uses Portable Text for that field. Otherwise pass as plain string.
+   */
+  private async resolveFieldValue(
+    client: SanityClient,
+    documentType: string,
+    fieldName: string,
+    textValue: string
+  ): Promise<string | Array<Record<string, unknown>>> {
+    const fieldType = await this.getFieldTypeFromSchema(client, documentType, fieldName);
+    logger.info(`Field ${documentType}.${fieldName} inferred as: ${fieldType}`);
+
+    if (fieldType === 'portableText') {
+      return this.textToPortableText(textValue);
+    }
+    // For string, unknown, or any other type, pass through as plain text
+    return textValue;
+  }
+
+  /**
    * Helper: Infer the Sanity field type from an actual value
    */
   private inferFieldType(value: unknown): string {
@@ -275,7 +320,7 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'create_document',
-    description: 'Creates a new document in Sanity CMS as a draft. IMPORTANT: Call get_document_types FIRST to discover field names and types. Use "name" for authors/categories, "title" for posts/pages. For fields that get_document_types reports as "portableText", use the "body" or "bio" parameters (plain text auto-converts). For "string" fields, use the matching parameter directly.',
+    description: 'Creates a new document in Sanity CMS as a draft. IMPORTANT: Call get_document_types FIRST to discover field names. Use "name" for authors/categories, "title" for posts/pages. The tool auto-detects whether body/bio fields are Portable Text or plain string from the schema — just pass plain text and the tool handles the rest.',
     endpoint: '/tools/create-document',
     parameters: [
       {
@@ -305,7 +350,7 @@ export class SanityToolFunction extends ToolFunction {
       {
         name: 'body',
         type: ParameterType.String,
-        description: 'Body/content as plain text. ONLY use if get_document_types shows the "body" field type is "portableText". Plain text is auto-converted to Sanity block format. Separate paragraphs with blank lines.',
+        description: 'Body/content as plain text. The tool auto-detects the field type from the schema and converts to Portable Text if needed. Separate paragraphs with blank lines.',
         required: false
       },
       {
@@ -317,7 +362,7 @@ export class SanityToolFunction extends ToolFunction {
       {
         name: 'bio',
         type: ParameterType.String,
-        description: 'Bio as plain text. ONLY use if get_document_types shows the "bio" field type is "portableText". Plain text is auto-converted to Sanity block format.',
+        description: 'Bio as plain text. The tool auto-detects the field type from the schema and converts to Portable Text if needed.',
         required: false
       },
       {
@@ -383,12 +428,17 @@ export class SanityToolFunction extends ToolFunction {
         document.description = parameters.description;
       }
 
+      // Auto-detect field types from schema before converting
       if (parameters.body) {
-        document.body = this.textToPortableText(parameters.body);
+        document.body = await this.resolveFieldValue(
+          client, parameters.document_type, 'body', parameters.body
+        );
       }
 
       if (parameters.bio) {
-        document.bio = this.textToPortableText(parameters.bio);
+        document.bio = await this.resolveFieldValue(
+          client, parameters.document_type, 'bio', parameters.bio
+        );
       }
 
       // Parse any extra fields
@@ -426,7 +476,7 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'update_document',
-    description: 'Updates specific fields on an existing Sanity document. IMPORTANT: Call get_document_types FIRST to discover correct field names and types. Use "name" for authors/categories, "title" for posts/pages. For "portableText" fields, use body/bio params. For "string" fields, use the matching parameter.',
+    description: 'Updates specific fields on an existing Sanity document. IMPORTANT: Call get_document_types FIRST to discover correct field names. Use "name" for authors/categories, "title" for posts/pages. The tool auto-detects whether body/bio fields are Portable Text or plain string — just pass plain text.',
     endpoint: '/tools/update-document',
     parameters: [
       {
@@ -456,7 +506,7 @@ export class SanityToolFunction extends ToolFunction {
       {
         name: 'body',
         type: ParameterType.String,
-        description: 'New body/content as plain text. ONLY use if get_document_types shows "body" is "portableText". Auto-converted to Sanity block format.',
+        description: 'New body/content as plain text. The tool auto-detects the field type and converts to Portable Text if needed.',
         required: false
       },
       {
@@ -468,7 +518,7 @@ export class SanityToolFunction extends ToolFunction {
       {
         name: 'bio',
         type: ParameterType.String,
-        description: 'New bio as plain text. ONLY use if get_document_types shows "bio" is "portableText". Auto-converted to Sanity block format.',
+        description: 'New bio as plain text. The tool auto-detects the field type and converts to Portable Text if needed.',
         required: false
       },
       {
@@ -499,6 +549,10 @@ export class SanityToolFunction extends ToolFunction {
     try {
       const client = await this.getSanityClient();
 
+      // Fetch the existing document to determine its _type for schema lookups
+      const existingDoc = await client.getDocument(parameters.document_id);
+      const documentType = (existingDoc?._type as string) || '';
+
       // Build updates from flat parameters
       const updates: Record<string, unknown> = {};
 
@@ -518,12 +572,17 @@ export class SanityToolFunction extends ToolFunction {
         updates.description = parameters.description;
       }
 
+      // Auto-detect field types from schema before converting
       if (parameters.body) {
-        updates.body = this.textToPortableText(parameters.body);
+        updates.body = documentType
+          ? await this.resolveFieldValue(client, documentType, 'body', parameters.body)
+          : parameters.body;
       }
 
       if (parameters.bio) {
-        updates.bio = this.textToPortableText(parameters.bio);
+        updates.bio = documentType
+          ? await this.resolveFieldValue(client, documentType, 'bio', parameters.bio)
+          : parameters.bio;
       }
 
       // Parse any extra fields

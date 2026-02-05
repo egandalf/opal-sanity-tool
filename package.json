@@ -1,6 +1,6 @@
 {
   "name": "sanity-content-tool",
-  "version": "1.0.0-dev.4",
+  "version": "1.0.0-dev.5",
   "description": "Opal Tool for OCP integrating with Sanity CMS for content operations and RAG",
   "main": "dist/index.js",
   "scripts": {
