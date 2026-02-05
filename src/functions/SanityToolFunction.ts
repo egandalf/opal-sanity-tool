@@ -154,25 +154,19 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'query_documents',
-    description: 'Executes a GROQ query against Sanity CMS. GROQ is Sanity\'s query language. Example: *[_type == "post"]{title, slug}',
+    description: 'Executes a GROQ query against Sanity CMS. IMPORTANT: Use get_document_types first to discover field names for a type. Common patterns: authors/categories use "name" not "title". Examples: *[_type == "category" && name == "MarTech"]{_id, name} or *[_type == "post"]{title, slug}',
     endpoint: '/tools/query-documents',
     parameters: [
       {
         name: 'query',
         type: ParameterType.String,
-        description: 'The GROQ query to execute',
+        description: 'The GROQ query to execute. IMPORTANT: Use get_document_types first to learn the correct field names. Authors and categories typically use "name", posts use "title".',
         required: true
-      },
-      {
-        name: 'params',
-        type: ParameterType.Dictionary,
-        description: 'Optional parameters to pass to the query (e.g., {"type": "post"})',
-        required: false
       }
     ]
   })
   async queryDocuments(
-    parameters: { query: string; params?: Record<string, unknown> },
+    parameters: { query: string },
     authData?: Record<string, unknown>
   ): Promise<{
     success: boolean;
@@ -182,7 +176,7 @@ export class SanityToolFunction extends ToolFunction {
   }> {
     try {
       const client = await this.getSanityClient();
-      const results = await client.fetch(parameters.query, parameters.params || {});
+      const results = await client.fetch(parameters.query);
 
       return {
         success: true,
@@ -199,29 +193,143 @@ export class SanityToolFunction extends ToolFunction {
   }
 
   /**
+   * Helper: Convert plain text to Sanity Portable Text block array
+   */
+  private textToPortableText(text: string): Array<Record<string, unknown>> {
+    return text.split('\n\n').map((paragraph, index) => ({
+      _key: `block-${index}`,
+      _type: 'block',
+      children: [
+        {
+          _key: `span-${index}`,
+          _type: 'span',
+          marks: [],
+          text: paragraph.trim()
+        }
+      ],
+      markDefs: [],
+      style: 'normal'
+    }));
+  }
+
+  /**
+   * Helper: Infer the Sanity field type from an actual value
+   */
+  private inferFieldType(value: unknown): string {
+    if (value === null || value === undefined) {
+      return 'unknown';
+    }
+
+    if (typeof value === 'string') {
+      // Check if it looks like a datetime
+      if (/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?/.test(value)) {
+        return 'datetime';
+      }
+      return 'string';
+    }
+
+    if (typeof value === 'number') {
+      return Number.isInteger(value) ? 'integer' : 'number';
+    }
+
+    if (typeof value === 'boolean') {
+      return 'boolean';
+    }
+
+    if (Array.isArray(value)) {
+      if (value.length > 0 && typeof value[0] === 'object' && value[0] !== null) {
+        const firstItem = value[0] as Record<string, unknown>;
+        if (firstItem._type === 'block') {
+          return 'portableText';
+        }
+        if (firstItem._type === 'reference') {
+          return 'array of references';
+        }
+        return `array of ${firstItem._type || 'objects'}`;
+      }
+      return 'array';
+    }
+
+    if (typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      if (obj._type === 'slug') {
+        return 'slug';
+      }
+      if (obj._type === 'image') {
+        return 'image';
+      }
+      if (obj._type === 'reference') {
+        return 'reference';
+      }
+      if (obj.asset && typeof obj.asset === 'object') {
+        return 'image';
+      }
+      return obj._type ? String(obj._type) : 'object';
+    }
+
+    return 'unknown';
+  }
+
+  /**
    * Tool: Create a new document
    */
   @tool({
     name: 'create_document',
-    description: 'Creates a new document in Sanity CMS. The document will be created as a draft by default.',
+    description: 'Creates a new document in Sanity CMS as a draft. IMPORTANT: Call get_document_types FIRST to discover field names and types. Use "name" for authors/categories, "title" for posts/pages. For fields that get_document_types reports as "portableText", use the "body" or "bio" parameters (plain text auto-converts). For "string" fields, use the matching parameter directly.',
     endpoint: '/tools/create-document',
     parameters: [
       {
         name: 'document_type',
         type: ParameterType.String,
-        description: 'The type of document to create (e.g., "post", "page", "article")',
+        description: 'The Sanity document type (e.g., "post", "page", "author", "category")',
         required: true
       },
       {
-        name: 'document_data',
-        type: ParameterType.Dictionary,
-        description: 'The document data as a JSON object. Should include all required fields for the document type.',
-        required: true
+        name: 'title',
+        type: ParameterType.String,
+        description: 'Title field - ONLY for "post" and "page" types. Do NOT use for authors or categories (use "name" instead).',
+        required: false
+      },
+      {
+        name: 'name',
+        type: ParameterType.String,
+        description: 'Name field - REQUIRED for "author", "category", and "tag" types. Do NOT use for posts or pages (use "title" instead).',
+        required: false
+      },
+      {
+        name: 'slug',
+        type: ParameterType.String,
+        description: 'URL-friendly slug (e.g., "my-blog-post"). Auto-formatted as a Sanity slug object.',
+        required: false
+      },
+      {
+        name: 'body',
+        type: ParameterType.String,
+        description: 'Body/content as plain text. ONLY use if get_document_types shows the "body" field type is "portableText". Plain text is auto-converted to Sanity block format. Separate paragraphs with blank lines.',
+        required: false
+      },
+      {
+        name: 'description',
+        type: ParameterType.String,
+        description: 'Short description or excerpt text',
+        required: false
+      },
+      {
+        name: 'bio',
+        type: ParameterType.String,
+        description: 'Bio as plain text. ONLY use if get_document_types shows the "bio" field type is "portableText". Plain text is auto-converted to Sanity block format.',
+        required: false
+      },
+      {
+        name: 'extra_fields',
+        type: ParameterType.String,
+        description: 'Additional fields as a simple JSON string for any fields not covered above. Example: {"color": "blue", "order": 3}',
+        required: false
       },
       {
         name: 'publish',
         type: ParameterType.Boolean,
-        description: 'Whether to publish the document immediately after creation. Default is false (creates as draft).',
+        description: 'Whether to publish immediately. Default is false (creates as draft).',
         required: false
       }
     ]
@@ -229,7 +337,13 @@ export class SanityToolFunction extends ToolFunction {
   async createDocument(
     parameters: {
       document_type: string;
-      document_data: Record<string, unknown>;
+      title?: string;
+      slug?: string;
+      body?: string;
+      description?: string;
+      name?: string;
+      bio?: string;
+      extra_fields?: string;
       publish?: boolean;
     },
     authData?: Record<string, unknown>
@@ -242,20 +356,56 @@ export class SanityToolFunction extends ToolFunction {
     try {
       const client = await this.getSanityClient();
 
-      const document = {
-        _type: parameters.document_type,
-        ...parameters.document_data
+      // Build document from flat parameters
+      const document: Record<string, unknown> = {
+        _type: parameters.document_type
       };
 
-      const result = await client.create(document);
-
-      // If publish is requested, publish the document
-      if (parameters.publish && result._id) {
-        await client
-          .patch(result._id)
-          .set({ _id: result._id.replace('drafts.', '') })
-          .commit();
+      // Create as draft by default
+      if (!parameters.publish) {
+        document._id = 'drafts.';
       }
+
+      // Map flat params to Sanity fields
+      if (parameters.title) {
+        document.title = parameters.title;
+      }
+
+      if (parameters.name) {
+        document.name = parameters.name;
+      }
+
+      if (parameters.slug) {
+        document.slug = { _type: 'slug', current: parameters.slug };
+      }
+
+      if (parameters.description) {
+        document.description = parameters.description;
+      }
+
+      if (parameters.body) {
+        document.body = this.textToPortableText(parameters.body);
+      }
+
+      if (parameters.bio) {
+        document.bio = this.textToPortableText(parameters.bio);
+      }
+
+      // Parse any extra fields
+      if (parameters.extra_fields) {
+        try {
+          const extra = typeof parameters.extra_fields === 'string'
+            ? JSON.parse(parameters.extra_fields)
+            : parameters.extra_fields;
+          Object.assign(document, extra);
+        } catch (e) {
+          logger.warn('Could not parse extra_fields, skipping:', e);
+        }
+      }
+
+      logger.info('Creating document:', JSON.stringify(document));
+
+      const result = await client.create(document as { _type: string; [key: string]: unknown });
 
       return {
         success: true,
@@ -276,27 +426,69 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'update_document',
-    description: 'Updates an existing document in Sanity CMS. Only the specified fields will be updated.',
+    description: 'Updates specific fields on an existing Sanity document. IMPORTANT: Call get_document_types FIRST to discover correct field names and types. Use "name" for authors/categories, "title" for posts/pages. For "portableText" fields, use body/bio params. For "string" fields, use the matching parameter.',
     endpoint: '/tools/update-document',
     parameters: [
       {
         name: 'document_id',
         type: ParameterType.String,
-        description: 'The ID of the document to update',
+        description: 'The ID of the document to update (e.g., "drafts.abc123" or "abc123")',
         required: true
       },
       {
-        name: 'updates',
-        type: ParameterType.Dictionary,
-        description: 'The fields to update as a JSON object',
-        required: true
+        name: 'title',
+        type: ParameterType.String,
+        description: 'New title - ONLY for "post" and "page" types. Do NOT use for authors or categories.',
+        required: false
+      },
+      {
+        name: 'name',
+        type: ParameterType.String,
+        description: 'New name - for "author", "category", and "tag" types. Do NOT use for posts or pages.',
+        required: false
+      },
+      {
+        name: 'slug',
+        type: ParameterType.String,
+        description: 'New URL-friendly slug',
+        required: false
+      },
+      {
+        name: 'body',
+        type: ParameterType.String,
+        description: 'New body/content as plain text. ONLY use if get_document_types shows "body" is "portableText". Auto-converted to Sanity block format.',
+        required: false
+      },
+      {
+        name: 'description',
+        type: ParameterType.String,
+        description: 'New description or excerpt',
+        required: false
+      },
+      {
+        name: 'bio',
+        type: ParameterType.String,
+        description: 'New bio as plain text. ONLY use if get_document_types shows "bio" is "portableText". Auto-converted to Sanity block format.',
+        required: false
+      },
+      {
+        name: 'extra_fields',
+        type: ParameterType.String,
+        description: 'Additional fields as a simple JSON string. Example: {"color": "blue", "order": 3}',
+        required: false
       }
     ]
   })
   async updateDocument(
     parameters: {
       document_id: string;
-      updates: Record<string, unknown>;
+      title?: string;
+      slug?: string;
+      body?: string;
+      description?: string;
+      name?: string;
+      bio?: string;
+      extra_fields?: string;
     },
     authData?: Record<string, unknown>
   ): Promise<{
@@ -307,9 +499,55 @@ export class SanityToolFunction extends ToolFunction {
     try {
       const client = await this.getSanityClient();
 
+      // Build updates from flat parameters
+      const updates: Record<string, unknown> = {};
+
+      if (parameters.title) {
+        updates.title = parameters.title;
+      }
+
+      if (parameters.name) {
+        updates.name = parameters.name;
+      }
+
+      if (parameters.slug) {
+        updates.slug = { _type: 'slug', current: parameters.slug };
+      }
+
+      if (parameters.description) {
+        updates.description = parameters.description;
+      }
+
+      if (parameters.body) {
+        updates.body = this.textToPortableText(parameters.body);
+      }
+
+      if (parameters.bio) {
+        updates.bio = this.textToPortableText(parameters.bio);
+      }
+
+      // Parse any extra fields
+      if (parameters.extra_fields) {
+        try {
+          const extra = typeof parameters.extra_fields === 'string'
+            ? JSON.parse(parameters.extra_fields)
+            : parameters.extra_fields;
+          Object.assign(updates, extra);
+        } catch (e) {
+          logger.warn('Could not parse extra_fields, skipping:', e);
+        }
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return {
+          success: false,
+          error: 'No fields to update. Provide at least one field (title, name, slug, body, description, bio, or extra_fields).'
+        };
+      }
+
       const result = await client
         .patch(parameters.document_id)
-        .set(parameters.updates)
+        .set(updates)
         .commit();
 
       return {
@@ -563,8 +801,9 @@ export class SanityToolFunction extends ToolFunction {
       }
 
       // Build the search query using Sanity's text search
-      const groqQuery = `*[${typeFilter}[title, body, description, content, text] match $searchTerm] | score(
-        boost([title] match $searchTerm, 3),
+      // Include both "title" and "name" since different types use different fields
+      const groqQuery = `*[${typeFilter}[title, name, body, description, content, text] match $searchTerm] | score(
+        boost([title, name] match $searchTerm, 3),
         boost([description] match $searchTerm, 2),
         [body, content, text] match $searchTerm
       ) | order(_score desc) [0...${maxResults}] {
@@ -572,6 +811,7 @@ export class SanityToolFunction extends ToolFunction {
         _type,
         _score,
         title,
+        name,
         slug,
         description,
         "excerpt": coalesce(
@@ -604,43 +844,103 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'get_document_types',
-    description: 'Returns a list of document types available in the Sanity dataset, based on existing documents.',
+    description: 'Returns document types with their field names AND field types (e.g., string, portableText, slug, reference, image, datetime). IMPORTANT: Always call this before create_document or query_documents to learn the correct field names and types. Field type "portableText" means the field requires Sanity block content (use body/bio params). Field type "string" means plain text. Field type "slug" means a URL slug. Field type "reference" means a link to another document.',
     endpoint: '/tools/get-document-types',
-    parameters: []
+    parameters: [
+      {
+        name: 'document_type',
+        type: ParameterType.String,
+        description: 'Optional: get detailed fields for a specific type (e.g., "post", "author", "category"). If omitted, returns a summary of all types with fields.',
+        required: false
+      }
+    ]
   })
   async getDocumentTypes(
-    parameters: Record<string, never>,
+    parameters: { document_type?: string },
     authData?: Record<string, unknown>
   ): Promise<{
     success: boolean;
     types?: Array<{
       type: string;
       count: number;
+      fields: Array<{ name: string; type: string }>;
     }>;
     error?: string;
   }> {
     try {
       const client = await this.getSanityClient();
 
-      // Query to get unique document types and their counts
-      const query = `{
-        "types": *[!(_type match "system.*") && !(_type match "sanity.*")] {
-          _type
-        } | order(_type asc)
-      }`;
+      if (parameters.document_type) {
+        // Get detailed field info for a specific type by sampling documents
+        const docs = await client.fetch(
+          `*[_type == $type][0...5]`,
+          { type: parameters.document_type }
+        ) as Array<Record<string, unknown>>;
 
-      const result = await client.fetch(query);
+        // Collect field names and infer types from values across samples
+        const fieldTypes: Record<string, string> = {};
+        for (const doc of docs) {
+          for (const [key, value] of Object.entries(doc)) {
+            // Only set type if we haven't seen it yet or current is 'unknown'
+            if (!fieldTypes[key] || fieldTypes[key] === 'unknown') {
+              fieldTypes[key] = this.inferFieldType(value);
+            }
+          }
+        }
 
-      // Count occurrences of each type
-      const typeCounts: Record<string, number> = {};
-      for (const doc of result.types) {
-        typeCounts[doc._type] = (typeCounts[doc._type] || 0) + 1;
+        const fields = Object.entries(fieldTypes)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, type]) => ({ name, type }));
+
+        const totalCount = await client.fetch(
+          `count(*[_type == $type])`,
+          { type: parameters.document_type }
+        );
+
+        return {
+          success: true,
+          types: [{
+            type: parameters.document_type,
+            count: totalCount as number,
+            fields
+          }]
+        };
       }
 
-      const types = Object.entries(typeCounts).map(([type, count]) => ({
-        type,
-        count
-      }));
+      // Get all types with sample fields from one document each
+      const query = `*[!(_type match "system.*") && !(_type match "sanity.*")] { _type }`;
+      const allDocs = await client.fetch(query) as Array<Record<string, unknown>>;
+
+      // Count types
+      const typeCounts: Record<string, number> = {};
+      for (const doc of allDocs) {
+        const t = doc._type as string;
+        typeCounts[t] = (typeCounts[t] || 0) + 1;
+      }
+
+      // Fetch one sample per type and infer field types
+      const types: Array<{ type: string; count: number; fields: Array<{ name: string; type: string }> }> = [];
+
+      for (const type of Object.keys(typeCounts).sort()) {
+        const sample = await client.fetch(
+          `*[_type == $type][0]`,
+          { type }
+        ) as Record<string, unknown> | null;
+
+        const fields: Array<{ name: string; type: string }> = [];
+        if (sample) {
+          for (const [key, value] of Object.entries(sample)) {
+            fields.push({ name: key, type: this.inferFieldType(value) });
+          }
+          fields.sort((a, b) => a.name.localeCompare(b.name));
+        }
+
+        types.push({
+          type,
+          count: typeCounts[type],
+          fields
+        });
+      }
 
       return {
         success: true,

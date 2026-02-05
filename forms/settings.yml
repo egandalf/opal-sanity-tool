@@ -16,7 +16,7 @@ sections:
 
       - key: api_token
         label: API Token
-        type: password
+        type: secret
         help: Sanity API token with read/write permissions. Generate one at manage.sanity.io under API settings.
         required: true
 

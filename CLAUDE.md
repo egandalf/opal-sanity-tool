@@ -20,7 +20,8 @@ opal-sanity-tool/
 ├── assets/
 │   ├── icon.svg
 │   ├── logo.svg
-│   └── overview.md
+│   └── directory/
+│       └── overview.md          # Required: must be at assets/directory/overview.md
 ├── app.yml                      # OCP app manifest
 ├── package.json
 ├── tsconfig.json
@@ -53,12 +54,13 @@ async toolName(params: { param1: string }, auth?: AuthData): Promise<ToolResult>
 }
 ```
 
-### Parameter Types
+### Parameter Types (ParameterType enum)
 - `String` - Text values
 - `Number` - Numeric values
+- `Integer` - Integer values
 - `Boolean` - True/false
-- `Object` - JSON objects
-- `Array` - Arrays of values
+- `Dictionary` - JSON objects (NOT "Object")
+- `List` - Arrays of values (NOT "Array")
 
 ### Lifecycle Hooks
 - `onInstall()` - When app is installed
@@ -111,17 +113,29 @@ npm run lint
 # Test
 npm run test
 
-# OCP Commands
-ocp app register      # Register app with OCP
-ocp app prepare       # Prepare for publishing
-ocp app publish       # Publish to marketplace
-ocp app install       # Install for testing
+# OCP App Commands
+ocp app register                          # Register app with OCP
+ocp app validate                          # Validate app locally
+ocp app prepare                           # Validate, package, upload and build
+ocp app package                           # Package for manual upload
+
+# OCP Directory Commands (publish, install, manage)
+ocp directory publish jgs_sanity_cms@1.0.0-dev.1                          # Publish a version
+ocp directory install jgs_sanity_cms@1.0.0-dev.1 <account_id>            # Install to an account
+ocp directory status                                                      # Check app version status
+ocp directory info                                                        # Get app info
+ocp directory list                                                        # List registered app versions
+ocp directory list-installs                                               # List installations
+ocp directory list-functions                                              # List exposed functions
+ocp directory uninstall                                                   # Uninstall from an account
+ocp directory unpublish                                                   # Unpublish a version
+ocp directory upgrade                                                     # Upgrade an install to a new version
 ```
 
 ## Configuration Files
 
 ### app.yml (Configured)
-- **app_id**: `sanity-content-tool`
+- **app_id**: `jgs_sanity_cms` (must match: `^[a-z][a-z_0-9]{2,31}$`)
 - **display_name**: `Sanity Content Tool`
 - **vendor**: `optimizely`
 - **runtime**: `node22`
@@ -135,6 +149,8 @@ ocp app install       # Install for testing
 ### forms/settings.yml Notes
 - Use `help:` not `helpText:` for field descriptions
 - Use `text:` not `label:` in select options
+- Use `type: secret` for sensitive fields (NOT `password`)
+- Valid types: `text`, `secret`, `select`
 - Required fields need proper validation
 
 ## RAG Implementation Notes
@@ -155,6 +171,11 @@ ocp app install       # Install for testing
 - Ensure `grpc-boom` resolution is set to `3.0.11` in package.json
 - Include both `lint` and `test` scripts
 - Validate app.yml against OCP schema
+- `app_id` must be lowercase alpha-numeric and underscore only (`^[a-z][a-z_0-9]{2,31}$`)
+- `assets/directory/overview.md` is required (NOT `assets/overview.md`)
+- Form field types must be valid: `text`, `secret`, `select` (NOT `password`)
+- Must have `yarn.lock` for `ocp app prepare` (run `yarn install --ignore-engines`)
+- Requires Node.js v22+ for OCP CLI commands
 
 ### Testing
 - Mock Sanity API responses for unit tests

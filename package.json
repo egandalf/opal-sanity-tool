@@ -1,6 +1,6 @@
 {
   "name": "sanity-content-tool",
-  "version": "1.0.0-dev.1",
+  "version": "1.0.0-dev.4",
   "description": "Opal Tool for OCP integrating with Sanity CMS for content operations and RAG",
   "main": "dist/index.js",
   "scripts": {
@@ -15,7 +15,7 @@
   "dependencies": {
     "@optimizely-opal/opal-tool-ocp-sdk": "1.0.0",
     "@sanity/client": "^6.24.1",
-    "@zaiusinc/app-sdk": "3.2.0",
+    "@zaiusinc/app-sdk": "3.3.3",
     "@zaiusinc/node-sdk": "3.0.0"
   },
   "devDependencies": {
