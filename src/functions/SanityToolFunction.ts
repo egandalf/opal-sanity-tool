@@ -96,7 +96,8 @@ export class SanityToolFunction extends ToolFunction {
         'publish_document - Publish draft documents',
         'unpublish_document - Unpublish documents',
         'search_content - Full-text search',
-        'get_document_types - List available document types'
+        'get_document_types - List available document types',
+        'upload_asset - Upload images/files from URL'
       ]
     };
   }
@@ -1007,6 +1008,111 @@ export class SanityToolFunction extends ToolFunction {
       };
     } catch (error) {
       logger.error('Error fetching document types:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
+      };
+    }
+  }
+
+  /**
+   * Tool: Upload an asset from a URL
+   */
+  @tool({
+    name: 'upload_asset',
+    description: 'Uploads an image or file to Sanity from a URL. Returns the asset reference that can be used in documents. Use this to add images to posts or avatars to authors.',
+    endpoint: '/tools/upload-asset',
+    parameters: [
+      {
+        name: 'url',
+        type: ParameterType.String,
+        description: 'The URL of the image or file to upload',
+        required: true
+      },
+      {
+        name: 'asset_type',
+        type: ParameterType.String,
+        description: 'Type of asset: "image" or "file". Defaults to "image".',
+        required: false
+      },
+      {
+        name: 'filename',
+        type: ParameterType.String,
+        description: 'Optional filename for the uploaded asset',
+        required: false
+      },
+      {
+        name: 'title',
+        type: ParameterType.String,
+        description: 'Optional title/alt text for the asset',
+        required: false
+      }
+    ]
+  })
+  async uploadAsset(
+    parameters: {
+      url: string;
+      asset_type?: string;
+      filename?: string;
+      title?: string;
+    },
+    authData?: Record<string, unknown>
+  ): Promise<{
+    success: boolean;
+    asset_id?: string;
+    asset_url?: string;
+    reference?: Record<string, unknown>;
+    error?: string;
+  }> {
+    try {
+      const client = await this.getSanityClient();
+
+      // Fetch the file from the URL
+      const response = await fetch(parameters.url);
+      if (!response.ok) {
+        return {
+          success: false,
+          error: `Failed to fetch URL: ${response.status} ${response.statusText}`
+        };
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+
+      // Determine asset type
+      const assetType = parameters.asset_type === 'file' ? 'file' : 'image';
+
+      // Extract filename from URL if not provided
+      let filename = parameters.filename;
+      if (!filename) {
+        const urlPath = new URL(parameters.url).pathname;
+        filename = urlPath.split('/').pop() || `asset-${Date.now()}`;
+      }
+
+      // Upload to Sanity
+      const uploadOptions: { filename: string; title?: string } = { filename };
+      if (parameters.title) {
+        uploadOptions.title = parameters.title;
+      }
+
+      const asset = await client.assets.upload(assetType, buffer, uploadOptions);
+
+      // Build reference object for use in documents
+      const reference = {
+        _type: assetType,
+        asset: {
+          _type: 'reference',
+          _ref: asset._id
+        }
+      };
+
+      return {
+        success: true,
+        asset_id: asset._id,
+        asset_url: asset.url,
+        reference
+      };
+    } catch (error) {
+      logger.error('Error uploading asset:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error occurred'
