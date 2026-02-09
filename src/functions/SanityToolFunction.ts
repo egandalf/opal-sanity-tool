@@ -84,7 +84,7 @@ export class SanityToolFunction extends ToolFunction {
   }> {
     return {
       name: 'Sanity Content Tool',
-      version: '1.0.0-dev.9',
+      version: '1.0.0-dev.10',
       description: 'Opal Tool for Sanity CMS content operations and RAG',
       capabilities: [
         'get_tool_info - Get tool information',
@@ -467,7 +467,7 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'create_document',
-    description: 'Creates a new document in Sanity CMS as a draft. IMPORTANT: Call get_document_types FIRST to discover field names. Use "name" for authors/categories, "title" for posts/pages. The tool auto-detects whether body/bio fields are Portable Text or plain string from the schema — just pass plain text and the tool handles the rest.',
+    description: 'Creates a new document in Sanity CMS as a draft. IMPORTANT: You MUST call get_document_types for the target type FIRST and ONLY set fields that exist in the schema. Do NOT guess field names — unknown fields will cause schema warnings in Sanity Studio. Use "name" for authors/categories, "title" for posts/pages. For image/asset references, use extra_fields with the exact field name from the schema (e.g., if the schema has a "photo" field, pass it via extra_fields). The tool auto-detects whether body/bio fields are Portable Text or plain string.',
     endpoint: '/tools/create-document',
     parameters: [
       {
@@ -491,7 +491,7 @@ export class SanityToolFunction extends ToolFunction {
       {
         name: 'slug',
         type: ParameterType.String,
-        description: 'URL-friendly slug (e.g., "my-blog-post"). Auto-formatted as a Sanity slug object.',
+        description: 'URL-friendly slug (e.g., "my-blog-post"). Auto-formatted as a Sanity slug object. ONLY use if get_document_types shows a "slug" field for this type.',
         required: false
       },
       {
@@ -515,7 +515,7 @@ export class SanityToolFunction extends ToolFunction {
       {
         name: 'extra_fields',
         type: ParameterType.String,
-        description: 'Additional fields as a simple JSON string for any fields not covered above. Example: {"color": "blue", "order": 3}',
+        description: 'Additional fields as a simple JSON string for any fields not covered above. Use this for image/asset references with the exact field name from get_document_types. Example: {"photo": {"_type": "image", "asset": {"_type": "reference", "_ref": "image-abc123"}}}. ONLY include fields that exist in the schema.',
         required: false
       },
       {
@@ -623,7 +623,7 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'update_document',
-    description: 'Updates specific fields on an existing Sanity document. IMPORTANT: Call get_document_types FIRST to discover correct field names. Use "name" for authors/categories, "title" for posts/pages. The tool auto-detects whether body/bio fields are Portable Text or plain string — just pass plain text.',
+    description: 'Updates specific fields on an existing Sanity document. IMPORTANT: Call get_document_types FIRST and ONLY set fields that exist in the schema — unknown fields cause warnings in Sanity Studio. Use "name" for authors/categories, "title" for posts/pages. For image/asset references, use extra_fields with the exact field name from the schema. The tool auto-detects whether body/bio fields are Portable Text or plain string.',
     endpoint: '/tools/update-document',
     parameters: [
       {
@@ -647,7 +647,7 @@ export class SanityToolFunction extends ToolFunction {
       {
         name: 'slug',
         type: ParameterType.String,
-        description: 'New URL-friendly slug',
+        description: 'New URL-friendly slug. ONLY use if get_document_types shows a "slug" field for this document type.',
         required: false
       },
       {
@@ -671,7 +671,7 @@ export class SanityToolFunction extends ToolFunction {
       {
         name: 'extra_fields',
         type: ParameterType.String,
-        description: 'Additional fields as a simple JSON string. Example: {"color": "blue", "order": 3}',
+        description: 'Additional fields as a simple JSON string. Use this for image/asset references with the exact field name from get_document_types. Example: {"mainImage": {"_type": "image", "asset": {"_type": "reference", "_ref": "image-abc123"}}}. ONLY include fields that exist in the schema.',
         required: false
       }
     ]
@@ -1203,7 +1203,7 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'upload_asset',
-    description: 'Uploads an image or file to Sanity. Returns the asset reference that can be used in documents. Use this to add images to posts or avatars to authors. Provide EITHER base64-encoded data (with content_type) OR a publicly accessible URL. IMPORTANT: The URL must be publicly accessible without authentication — authenticated or internal URLs will fail with a 401 error. When in doubt, prefer base64.',
+    description: 'Uploads an image or file to Sanity. Returns an asset reference object. To attach the asset to a document, call get_document_types FIRST to find the exact image field name (e.g., "mainImage", "photo", "avatar"), then pass the returned reference via create_document or update_document extra_fields using that field name. Do NOT guess the field name. Provide EITHER base64-encoded data (with content_type) OR a publicly accessible URL. IMPORTANT: The URL must be publicly accessible without authentication — authenticated or internal URLs will fail with a 401 error. When in doubt, prefer base64.',
     endpoint: '/tools/upload-asset',
     parameters: [
       {
