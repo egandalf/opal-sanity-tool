@@ -84,7 +84,7 @@ export class SanityToolFunction extends ToolFunction {
   }> {
     return {
       name: 'Sanity Content Tool',
-      version: '1.0.0-dev.10',
+      version: '1.0.0-dev.11',
       description: 'Opal Tool for Sanity CMS content operations and RAG',
       capabilities: [
         'get_tool_info - Get tool information',
@@ -467,7 +467,7 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'create_document',
-    description: 'Creates a new document in Sanity CMS as a draft. IMPORTANT: You MUST call get_document_types for the target type FIRST and ONLY set fields that exist in the schema. Do NOT guess field names — unknown fields will cause schema warnings in Sanity Studio. Use "name" for authors/categories, "title" for posts/pages. For image/asset references, use extra_fields with the exact field name from the schema (e.g., if the schema has a "photo" field, pass it via extra_fields). The tool auto-detects whether body/bio fields are Portable Text or plain string.',
+    description: 'Creates a new document in Sanity CMS as a draft. IMPORTANT: You MUST call get_document_types for the target type FIRST and ONLY set fields that were returned by get_document_types. Do NOT invent, guess, or assume any field names — unknown fields cause schema warnings in Sanity Studio. Use "name" for authors/categories, "title" for posts/pages. For image/asset references, use extra_fields with the exact field name from get_document_types. The tool auto-detects whether body/bio fields are Portable Text or plain string.',
     endpoint: '/tools/create-document',
     parameters: [
       {
@@ -623,7 +623,7 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'update_document',
-    description: 'Updates specific fields on an existing Sanity document. IMPORTANT: Call get_document_types FIRST and ONLY set fields that exist in the schema — unknown fields cause warnings in Sanity Studio. Use "name" for authors/categories, "title" for posts/pages. For image/asset references, use extra_fields with the exact field name from the schema. The tool auto-detects whether body/bio fields are Portable Text or plain string.',
+    description: 'Updates specific fields on an existing Sanity document. IMPORTANT: Call get_document_types FIRST and ONLY set fields that were returned by get_document_types. Do NOT invent or guess field names — unknown fields cause warnings in Sanity Studio. Use "name" for authors/categories, "title" for posts/pages. For image/asset references, use extra_fields with the exact field name from get_document_types. The tool auto-detects whether body/bio fields are Portable Text or plain string.',
     endpoint: '/tools/update-document',
     parameters: [
       {
@@ -1087,7 +1087,7 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'get_document_types',
-    description: 'Returns document types with their field names AND field types (e.g., string, portableText, slug, reference, image, datetime). IMPORTANT: Always call this before create_document or query_documents to learn the correct field names and types. Field type "portableText" means the field requires Sanity block content (use body/bio params). Field type "string" means plain text. Field type "slug" means a URL slug. Field type "reference" means a link to another document.',
+    description: 'Returns document types with their field names AND field types by sampling existing documents. IMPORTANT: Always call this before create_document, update_document, or query_documents. ONLY use field names returned by this tool — do NOT invent, guess, or assume any field names that are not in the results. If a field you expect is missing, it may not be populated in any existing document. Field types: "portableText" = Sanity block content (use body/bio params), "string" = plain text, "slug" = URL slug, "reference" = link to another document, "image" = image asset.',
     endpoint: '/tools/get-document-types',
     parameters: [
       {
@@ -1115,8 +1115,10 @@ export class SanityToolFunction extends ToolFunction {
 
       if (parameters.document_type) {
         // Get detailed field info for a specific type by sampling documents
+        // Sample up to 50 documents to maximize field discovery (fields only
+        // appear if at least one sampled document has them populated)
         const docs = await client.fetch(
-          `*[_type == $type][0...5]`,
+          `*[_type == $type][0...50]`,
           { type: parameters.document_type }
         ) as Array<Record<string, unknown>>;
 
@@ -1161,22 +1163,27 @@ export class SanityToolFunction extends ToolFunction {
         typeCounts[t] = (typeCounts[t] || 0) + 1;
       }
 
-      // Fetch one sample per type and infer field types
+      // Fetch multiple samples per type and merge fields across them
       const types: Array<{ type: string; count: number; fields: Array<{ name: string; type: string }> }> = [];
 
       for (const type of Object.keys(typeCounts).sort()) {
-        const sample = await client.fetch(
-          `*[_type == $type][0]`,
+        const samples = await client.fetch(
+          `*[_type == $type][0...10]`,
           { type }
-        ) as Record<string, unknown> | null;
+        ) as Array<Record<string, unknown>>;
 
-        const fields: Array<{ name: string; type: string }> = [];
-        if (sample) {
+        const fieldTypes: Record<string, string> = {};
+        for (const sample of samples) {
           for (const [key, value] of Object.entries(sample)) {
-            fields.push({ name: key, type: this.inferFieldType(value) });
+            if (!fieldTypes[key] || fieldTypes[key] === 'unknown') {
+              fieldTypes[key] = this.inferFieldType(value);
+            }
           }
-          fields.sort((a, b) => a.name.localeCompare(b.name));
         }
+
+        const fields = Object.entries(fieldTypes)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, type]) => ({ name, type }));
 
         types.push({
           type,
