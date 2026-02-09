@@ -1,7 +1,7 @@
 meta:
   app_id: jgs_sanity_cms
   display_name: Sanity Content Tool
-  version: 1.0.0-dev.8
+  version: 1.0.0-dev.9
   vendor: optimizely
   summary: Opal Tool for Sanity CMS content operations including CRUD, publish, and RAG capabilities
   support_url: https://github.com/egandalf/opal-sanity-tool

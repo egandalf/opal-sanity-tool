@@ -84,7 +84,7 @@ export class SanityToolFunction extends ToolFunction {
   }> {
     return {
       name: 'Sanity Content Tool',
-      version: '1.0.0-dev.8',
+      version: '1.0.0-dev.9',
       description: 'Opal Tool for Sanity CMS content operations and RAG',
       capabilities: [
         'get_tool_info - Get tool information',
@@ -1199,24 +1199,30 @@ export class SanityToolFunction extends ToolFunction {
   }
 
   /**
-   * Tool: Upload an asset from base64-encoded data
+   * Tool: Upload an asset from base64-encoded data or a public URL
    */
   @tool({
     name: 'upload_asset',
-    description: 'Uploads an image or file to Sanity from base64-encoded data. Returns the asset reference that can be used in documents. Use this to add images to posts or avatars to authors. The caller must provide the file content as a base64-encoded string along with its MIME content type.',
+    description: 'Uploads an image or file to Sanity. Returns the asset reference that can be used in documents. Use this to add images to posts or avatars to authors. Provide EITHER base64-encoded data (with content_type) OR a publicly accessible URL. IMPORTANT: The URL must be publicly accessible without authentication — authenticated or internal URLs will fail with a 401 error. When in doubt, prefer base64.',
     endpoint: '/tools/upload-asset',
     parameters: [
       {
         name: 'data',
         type: ParameterType.String,
-        description: 'The base64-encoded file content. Do not include the data URI prefix (e.g., "data:image/png;base64,") — pass only the raw base64 string.',
-        required: true
+        description: 'Base64-encoded file content. Do not include the data URI prefix (e.g., "data:image/png;base64,") — pass only the raw base64 string. Provide this OR url, not both.',
+        required: false
+      },
+      {
+        name: 'url',
+        type: ParameterType.String,
+        description: 'A publicly accessible URL to fetch the file from. Must NOT require authentication — only unauthenticated public URLs are supported. Provide this OR data, not both.',
+        required: false
       },
       {
         name: 'content_type',
         type: ParameterType.String,
-        description: 'The MIME type of the file (e.g., "image/png", "image/jpeg", "application/pdf", "image/svg+xml").',
-        required: true
+        description: 'The MIME type of the file (e.g., "image/png", "image/jpeg", "application/pdf"). Required when using data. When using url, it is auto-detected from the response but can be overridden here.',
+        required: false
       },
       {
         name: 'asset_type',
@@ -1227,7 +1233,7 @@ export class SanityToolFunction extends ToolFunction {
       {
         name: 'filename',
         type: ParameterType.String,
-        description: 'Optional filename for the uploaded asset (e.g., "avatar.png"). If omitted, a default name with the correct extension is generated from the content_type.',
+        description: 'Optional filename for the uploaded asset (e.g., "avatar.png"). If omitted, a default name is generated.',
         required: false
       },
       {
@@ -1240,8 +1246,9 @@ export class SanityToolFunction extends ToolFunction {
   })
   async uploadAsset(
     parameters: {
-      data: string;
-      content_type: string;
+      data?: string;
+      url?: string;
+      content_type?: string;
       asset_type?: string;
       filename?: string;
       title?: string;
@@ -1257,33 +1264,75 @@ export class SanityToolFunction extends ToolFunction {
     try {
       const client = await this.getSanityClient();
 
-      // Strip data URI prefix if accidentally included
-      let base64Data = parameters.data;
-      const dataUriMatch = base64Data.match(/^data:[^;]+;base64,(.+)$/);
-      if (dataUriMatch) {
-        base64Data = dataUriMatch[1];
-      }
+      let buffer: Buffer;
+      let contentType = parameters.content_type || '';
+      let filename = parameters.filename || '';
 
-      // Decode base64 to Buffer
-      const buffer = Buffer.from(base64Data, 'base64');
+      if (parameters.data) {
+        // --- Base64 path ---
+        if (!parameters.content_type) {
+          return {
+            success: false,
+            error: 'content_type is required when uploading from base64 data.'
+          };
+        }
 
-      if (buffer.length === 0) {
+        // Strip data URI prefix if accidentally included
+        let base64Data = parameters.data;
+        const dataUriMatch = base64Data.match(/^data:[^;]+;base64,(.+)$/);
+        if (dataUriMatch) {
+          base64Data = dataUriMatch[1];
+        }
+
+        buffer = Buffer.from(base64Data, 'base64');
+
+        if (buffer.length === 0) {
+          return {
+            success: false,
+            error: 'Decoded data is empty. Ensure the base64 string is valid.'
+          };
+        }
+
+        if (!filename) {
+          filename = `asset-${Date.now()}${this.extensionFromMime(contentType)}`;
+        }
+      } else if (parameters.url) {
+        // --- URL path ---
+        const response = await fetch(parameters.url);
+        if (!response.ok) {
+          return {
+            success: false,
+            error: `Failed to fetch URL (${response.status} ${response.statusText}). Ensure the URL is publicly accessible without authentication.`
+          };
+        }
+
+        buffer = Buffer.from(await response.arrayBuffer());
+
+        // Use Content-Type from response if not explicitly provided
+        if (!contentType) {
+          contentType = response.headers.get('content-type')?.split(';')[0].trim() || 'application/octet-stream';
+        }
+
+        // Extract filename from URL if not provided
+        if (!filename) {
+          const urlPath = new URL(parameters.url).pathname;
+          const urlFilename = urlPath.split('/').pop();
+          filename = urlFilename && urlFilename.includes('.') ? urlFilename : `asset-${Date.now()}${this.extensionFromMime(contentType)}`;
+        }
+      } else {
         return {
           success: false,
-          error: 'Decoded data is empty. Ensure the base64 string is valid.'
+          error: 'Either "data" (base64 string) or "url" (public URL) must be provided.'
         };
       }
 
       // Determine asset type
       const assetType = parameters.asset_type === 'file' ? 'file' : 'image';
 
-      // Generate filename from content_type if not provided
-      const filename = parameters.filename || `asset-${Date.now()}${this.extensionFromMime(parameters.content_type)}`;
-
       // Upload to Sanity
       const uploadOptions: { filename: string; contentType: string; title?: string } = {
         filename,
-        contentType: parameters.content_type
+        contentType
       };
       if (parameters.title) {
         uploadOptions.title = parameters.title;
