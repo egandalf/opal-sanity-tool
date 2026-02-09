@@ -66,25 +66,24 @@ Build an Opal Tool for Optimizely Connect Platform (OCP) that integrates with Sa
 
 ### Search & Retrieval
 - [x] **Search Content** - Full-text search across Sanity content
-  - Parameters: search query, filters, document types
+  - Parameters: search query, filters, document types, text preview, custom fields
   - Returns: ranked search results with relevance scores
 
-- [ ] **Semantic Search** - Vector-based content retrieval
-  - Parameters: query text, similarity threshold, max results
-  - Returns: semantically similar content chunks
+- [x] **Semantic Search** - Enhanced search folded into retrieve_context
+  - Note: True vector search requires external embedding service; GROQ-based search with scoring/boosting used instead
 
 ### RAG Source Implementation
-- [ ] **Index Content** - Prepare content for RAG retrieval
-  - Parameters: document types to index, chunking strategy
-  - Returns: indexing status
+- [x] **Content Catalog** (`get_content_catalog`) - Discover available content for RAG
+  - Parameters: document type (optional), include samples
+  - Returns: types, counts, searchable fields, samples, date ranges
 
-- [ ] **Retrieve Context** - Get relevant content for LLM context
-  - Parameters: query, max tokens, document filters
-  - Returns: formatted context for RAG
+- [x] **Retrieve Context** (`retrieve_context`) - Primary RAG tool: search + fetch + chunk
+  - Parameters: query, document types, max results, max chars, include metadata
+  - Returns: LLM-ready text chunks with relevance scores and metadata
 
-- [ ] **RAG Query** - Combined search + context retrieval
-  - Parameters: user query, context window size
-  - Returns: relevant content chunks for augmentation
+- [x] **Document Text** (`get_document_text`) - Extract chunked text from a specific document
+  - Parameters: document ID, max chars, fields
+  - Returns: chunked plain text for LLM consumption
 
 ---
 

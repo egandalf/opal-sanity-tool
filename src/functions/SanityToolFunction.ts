@@ -84,7 +84,7 @@ export class SanityToolFunction extends ToolFunction {
   }> {
     return {
       name: 'Sanity Content Tool',
-      version: '1.0.0',
+      version: '1.0.0-dev.8',
       description: 'Opal Tool for Sanity CMS content operations and RAG',
       capabilities: [
         'get_tool_info - Get tool information',
@@ -95,9 +95,12 @@ export class SanityToolFunction extends ToolFunction {
         'delete_document - Delete documents',
         'publish_document - Publish draft documents',
         'unpublish_document - Unpublish documents',
-        'search_content - Full-text search',
+        'search_content - Full-text search with text preview and custom field support',
         'get_document_types - List available document types',
-        'upload_asset - Upload images/files from URL'
+        'upload_asset - Upload images/files from URL',
+        'get_document_text - Extract chunked plain text from a document',
+        'retrieve_context - RAG: search, extract, and chunk content for LLM context',
+        'get_content_catalog - Discover available content types, fields, and samples'
       ]
     };
   }
@@ -314,6 +317,149 @@ export class SanityToolFunction extends ToolFunction {
     }
 
     return 'unknown';
+  }
+
+  /**
+   * Helper: Split text into chunks at natural boundaries (paragraphs, sentences, hard limit).
+   */
+  private chunkText(text: string, maxChunkSize: number): string[] {
+    if (!text || text.length === 0) {
+      return [];
+    }
+    if (text.length <= maxChunkSize) {
+      return [text];
+    }
+
+    const chunks: string[] = [];
+    // Split into paragraphs first
+    const paragraphs = text.split(/\n\n+/);
+    let currentChunk = '';
+
+    for (const paragraph of paragraphs) {
+      const trimmed = paragraph.trim();
+      if (!trimmed) continue;
+
+      // If adding this paragraph fits, accumulate
+      if (currentChunk.length + trimmed.length + 2 <= maxChunkSize) {
+        currentChunk = currentChunk ? `${currentChunk}\n\n${trimmed}` : trimmed;
+        continue;
+      }
+
+      // Push current chunk if non-empty
+      if (currentChunk) {
+        chunks.push(currentChunk);
+        currentChunk = '';
+      }
+
+      // If the paragraph itself fits in one chunk, start a new chunk with it
+      if (trimmed.length <= maxChunkSize) {
+        currentChunk = trimmed;
+        continue;
+      }
+
+      // Paragraph exceeds chunk size — split by sentences
+      const sentences = trimmed.split(/(?<=\.)\s+/);
+      for (const sentence of sentences) {
+        if (currentChunk.length + sentence.length + 1 <= maxChunkSize) {
+          currentChunk = currentChunk ? `${currentChunk} ${sentence}` : sentence;
+        } else {
+          if (currentChunk) {
+            chunks.push(currentChunk);
+            currentChunk = '';
+          }
+          // If a single sentence exceeds chunk size, hard-split
+          if (sentence.length > maxChunkSize) {
+            let remaining = sentence;
+            while (remaining.length > maxChunkSize) {
+              chunks.push(remaining.slice(0, maxChunkSize - 3) + '...');
+              remaining = remaining.slice(maxChunkSize - 3);
+            }
+            currentChunk = remaining;
+          } else {
+            currentChunk = sentence;
+          }
+        }
+      }
+    }
+
+    if (currentChunk) {
+      chunks.push(currentChunk);
+    }
+
+    return chunks;
+  }
+
+  /**
+   * Helper: Extract all text content from a document, using pt::text extractions
+   * for Portable Text fields and direct values for string fields.
+   */
+  private extractDocumentText(
+    doc: Record<string, unknown>,
+    ptTextFields: Record<string, string>
+  ): string {
+    const systemFields = new Set([
+      '_id', '_type', '_rev', '_createdAt', '_updatedAt', '_key'
+    ]);
+    const sections: string[] = [];
+
+    for (const [key, value] of Object.entries(doc)) {
+      if (systemFields.has(key)) continue;
+
+      // Use pt::text extraction if available
+      const ptKey = `${key}Text`;
+      if (ptTextFields[ptKey] && typeof ptTextFields[ptKey] === 'string') {
+        const text = ptTextFields[ptKey].trim();
+        if (text) {
+          sections.push(`${this.formatFieldLabel(key)}: ${text}`);
+        }
+        continue;
+      }
+
+      // Handle different field types
+      if (typeof value === 'string' && value.trim()) {
+        sections.push(`${this.formatFieldLabel(key)}: ${value.trim()}`);
+      } else if (typeof value === 'object' && value !== null) {
+        const obj = value as Record<string, unknown>;
+        if (obj._type === 'slug' && obj.current) {
+          sections.push(`${this.formatFieldLabel(key)}: ${obj.current}`);
+        }
+        // Skip images, references, and other complex objects
+      }
+    }
+
+    return sections.join('\n\n');
+  }
+
+  /**
+   * Helper: Format a field name as a readable label (e.g., "body" -> "Body")
+   */
+  private formatFieldLabel(fieldName: string): string {
+    return fieldName.charAt(0).toUpperCase() + fieldName.slice(1).replace(/_/g, ' ');
+  }
+
+  /**
+   * Helper: Analyze a document's fields and build a GROQ projection that extracts
+   * plain text from all Portable Text fields using pt::text().
+   */
+  private buildTextExtractionProjection(doc: Record<string, unknown>): string {
+    const ptFields: string[] = [];
+    const systemFields = new Set([
+      '_id', '_type', '_rev', '_createdAt', '_updatedAt', '_key'
+    ]);
+
+    for (const [key, value] of Object.entries(doc)) {
+      if (systemFields.has(key)) continue;
+      const fieldType = this.inferFieldType(value);
+      if (fieldType === 'portableText') {
+        ptFields.push(`"${key}Text": pt::text(${key})`);
+      }
+    }
+
+    if (ptFields.length === 0) {
+      return '{ ... }';
+    }
+
+    return `{ ..., ${ptFields.join(', ')} }`;
   }
 
   /**
@@ -801,7 +947,7 @@ export class SanityToolFunction extends ToolFunction {
    */
   @tool({
     name: 'search_content',
-    description: 'Searches content in Sanity CMS using full-text search. Useful for RAG (Retrieval-Augmented Generation) to find relevant content.',
+    description: 'Searches content in Sanity CMS using full-text search with relevance scoring. Useful for RAG (Retrieval-Augmented Generation) to find relevant content. Optionally include longer text previews for scanning results before full retrieval.',
     endpoint: '/tools/search-content',
     parameters: [
       {
@@ -821,6 +967,18 @@ export class SanityToolFunction extends ToolFunction {
         type: ParameterType.Number,
         description: 'Maximum number of results to return. Defaults to the configured max_search_results setting.',
         required: false
+      },
+      {
+        name: 'include_text_preview',
+        type: ParameterType.Boolean,
+        description: 'When true, includes a longer text preview (~200 chars) from the body for each result. Useful for scanning results before full retrieval. Defaults to false.',
+        required: false
+      },
+      {
+        name: 'search_fields',
+        type: ParameterType.String,
+        description: 'Comma-separated list of additional field names to search in, beyond the defaults (title, name, body, description, content, text). E.g., "summary,subtitle".',
+        required: false
       }
     ]
   })
@@ -829,6 +987,8 @@ export class SanityToolFunction extends ToolFunction {
       search_query: string;
       document_types?: string[];
       limit?: number;
+      include_text_preview?: boolean;
+      search_fields?: string;
     },
     authData?: Record<string, unknown>
   ): Promise<{
@@ -860,12 +1020,39 @@ export class SanityToolFunction extends ToolFunction {
         typeFilter = `_type in [${types.map(t => `"${t}"`).join(', ')}] && `;
       }
 
-      // Build the search query using Sanity's text search
-      // Include both "title" and "name" since different types use different fields
-      const groqQuery = `*[${typeFilter}[title, name, body, description, content, text] match $searchTerm] | score(
+      // Build field list (default + custom)
+      const defaultFields = ['title', 'name', 'body', 'description', 'content', 'text'];
+      const extraFields = parameters.search_fields
+        ? parameters.search_fields.split(',').map(f => f.trim()).filter(f => f)
+        : [];
+      const allSearchFields = [...new Set([...defaultFields, ...extraFields])];
+      const fieldList = `[${allSearchFields.join(', ')}]`;
+
+      // Build projection with optional text preview
+      let excerptProjection: string;
+      if (parameters.include_text_preview) {
+        excerptProjection = `"excerpt": coalesce(
+          description,
+          pt::text(body[0..2]),
+          pt::text(content[0..2])
+        ),
+        "text_preview": coalesce(
+          pt::text(body[0..5]),
+          pt::text(content[0..5]),
+          description
+        )`;
+      } else {
+        excerptProjection = `"excerpt": coalesce(
+          description,
+          pt::text(body[0..2]),
+          pt::text(content[0..2])
+        )`;
+      }
+
+      const groqQuery = `*[${typeFilter}${fieldList} match $searchTerm] | score(
         boost([title, name] match $searchTerm, 3),
         boost([description] match $searchTerm, 2),
-        [body, content, text] match $searchTerm
+        ${fieldList} match $searchTerm
       ) | order(_score desc) [0...${maxResults}] {
         _id,
         _type,
@@ -874,11 +1061,7 @@ export class SanityToolFunction extends ToolFunction {
         name,
         slug,
         description,
-        "excerpt": coalesce(
-          description,
-          pt::text(body[0..2]),
-          pt::text(content[0..2])
-        )
+        ${excerptProjection}
       }`;
 
       const results = await client.fetch(groqQuery, {
@@ -1016,17 +1199,23 @@ export class SanityToolFunction extends ToolFunction {
   }
 
   /**
-   * Tool: Upload an asset from a URL
+   * Tool: Upload an asset from base64-encoded data
    */
   @tool({
     name: 'upload_asset',
-    description: 'Uploads an image or file to Sanity from a URL. Returns the asset reference that can be used in documents. Use this to add images to posts or avatars to authors.',
+    description: 'Uploads an image or file to Sanity from base64-encoded data. Returns the asset reference that can be used in documents. Use this to add images to posts or avatars to authors. The caller must provide the file content as a base64-encoded string along with its MIME content type.',
     endpoint: '/tools/upload-asset',
     parameters: [
       {
-        name: 'url',
+        name: 'data',
         type: ParameterType.String,
-        description: 'The URL of the image or file to upload',
+        description: 'The base64-encoded file content. Do not include the data URI prefix (e.g., "data:image/png;base64,") — pass only the raw base64 string.',
+        required: true
+      },
+      {
+        name: 'content_type',
+        type: ParameterType.String,
+        description: 'The MIME type of the file (e.g., "image/png", "image/jpeg", "application/pdf", "image/svg+xml").',
         required: true
       },
       {
@@ -1038,7 +1227,7 @@ export class SanityToolFunction extends ToolFunction {
       {
         name: 'filename',
         type: ParameterType.String,
-        description: 'Optional filename for the uploaded asset',
+        description: 'Optional filename for the uploaded asset (e.g., "avatar.png"). If omitted, a default name with the correct extension is generated from the content_type.',
         required: false
       },
       {
@@ -1051,7 +1240,8 @@ export class SanityToolFunction extends ToolFunction {
   })
   async uploadAsset(
     parameters: {
-      url: string;
+      data: string;
+      content_type: string;
       asset_type?: string;
       filename?: string;
       title?: string;
@@ -1067,29 +1257,34 @@ export class SanityToolFunction extends ToolFunction {
     try {
       const client = await this.getSanityClient();
 
-      // Fetch the file from the URL
-      const response = await fetch(parameters.url);
-      if (!response.ok) {
-        return {
-          success: false,
-          error: `Failed to fetch URL: ${response.status} ${response.statusText}`
-        };
+      // Strip data URI prefix if accidentally included
+      let base64Data = parameters.data;
+      const dataUriMatch = base64Data.match(/^data:[^;]+;base64,(.+)$/);
+      if (dataUriMatch) {
+        base64Data = dataUriMatch[1];
       }
 
-      const buffer = Buffer.from(await response.arrayBuffer());
+      // Decode base64 to Buffer
+      const buffer = Buffer.from(base64Data, 'base64');
+
+      if (buffer.length === 0) {
+        return {
+          success: false,
+          error: 'Decoded data is empty. Ensure the base64 string is valid.'
+        };
+      }
 
       // Determine asset type
       const assetType = parameters.asset_type === 'file' ? 'file' : 'image';
 
-      // Extract filename from URL if not provided
-      let filename = parameters.filename;
-      if (!filename) {
-        const urlPath = new URL(parameters.url).pathname;
-        filename = urlPath.split('/').pop() || `asset-${Date.now()}`;
-      }
+      // Generate filename from content_type if not provided
+      const filename = parameters.filename || `asset-${Date.now()}${this.extensionFromMime(parameters.content_type)}`;
 
       // Upload to Sanity
-      const uploadOptions: { filename: string; title?: string } = { filename };
+      const uploadOptions: { filename: string; contentType: string; title?: string } = {
+        filename,
+        contentType: parameters.content_type
+      };
       if (parameters.title) {
         uploadOptions.title = parameters.title;
       }
@@ -1113,6 +1308,632 @@ export class SanityToolFunction extends ToolFunction {
       };
     } catch (error) {
       logger.error('Error uploading asset:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
+      };
+    }
+  }
+
+  /**
+   * Helper: Map a MIME type to a file extension
+   */
+  private extensionFromMime(mime: string): string {
+    const map: Record<string, string> = {
+      'image/png': '.png',
+      'image/jpeg': '.jpg',
+      'image/gif': '.gif',
+      'image/webp': '.webp',
+      'image/svg+xml': '.svg',
+      'image/tiff': '.tiff',
+      'application/pdf': '.pdf',
+      'video/mp4': '.mp4',
+      'audio/mpeg': '.mp3',
+    };
+    return map[mime] || '';
+  }
+
+  /**
+   * Tool: Extract full text from a specific document, chunked for LLM consumption
+   */
+  @tool({
+    name: 'get_document_text',
+    description: 'Extracts the full plain text content from a specific Sanity document, chunked for LLM consumption. Use when you already have a document ID and need its text content. Portable Text fields are automatically converted to plain text.',
+    endpoint: '/tools/document-text',
+    parameters: [
+      {
+        name: 'document_id',
+        type: ParameterType.String,
+        description: 'The ID of the document to extract text from',
+        required: true
+      },
+      {
+        name: 'max_chars',
+        type: ParameterType.Number,
+        description: 'Maximum total characters to return. Defaults to the configured content_chunk_size. Set to 0 for unlimited.',
+        required: false
+      },
+      {
+        name: 'fields',
+        type: ParameterType.List,
+        description: 'Specific fields to extract text from (e.g., ["body", "description"]). If omitted, extracts from all text fields.',
+        required: false
+      }
+    ]
+  })
+  async getDocumentText(
+    parameters: {
+      document_id: string;
+      max_chars?: number;
+      fields?: string[];
+    },
+    authData?: Record<string, unknown>
+  ): Promise<{
+    success: boolean;
+    document_id?: string;
+    document_type?: string;
+    title?: string;
+    chunks?: Array<{
+      chunk_index: number;
+      total_chunks: number;
+      text: string;
+      char_count: number;
+    }>;
+    total_chars?: number;
+    total_chunks?: number;
+    error?: string;
+  }> {
+    try {
+      const client = await this.getSanityClient();
+      const ragSettings = await this.getRagSettings();
+      const chunkSize = parseInt(ragSettings.content_chunk_size || '1000', 10);
+
+      // Fetch the raw document
+      const doc = await client.getDocument(parameters.document_id) as Record<string, unknown> | undefined;
+      if (!doc) {
+        return {
+          success: false,
+          error: `Document "${parameters.document_id}" not found`
+        };
+      }
+
+      // Build pt::text projection for Portable Text fields
+      const projection = this.buildTextExtractionProjection(doc);
+      const enriched = await client.fetch(
+        `*[_id == $id]${projection}[0]`,
+        { id: parameters.document_id }
+      ) as Record<string, unknown>;
+
+      // Separate pt::text fields from the enriched result
+      const ptTextFields: Record<string, string> = {};
+      for (const [key, value] of Object.entries(enriched)) {
+        if (key.endsWith('Text') && typeof value === 'string') {
+          ptTextFields[key] = value;
+        }
+      }
+
+      // Filter to requested fields if specified
+      let sourceDoc = doc;
+      if (parameters.fields && parameters.fields.length > 0) {
+        const filtered: Record<string, unknown> = {};
+        for (const field of parameters.fields) {
+          if (doc[field] !== undefined) {
+            filtered[field] = doc[field];
+          }
+        }
+        sourceDoc = filtered;
+      }
+
+      // Extract text
+      const fullText = this.extractDocumentText(sourceDoc, ptTextFields);
+      if (!fullText) {
+        return {
+          success: true,
+          document_id: parameters.document_id,
+          document_type: doc._type as string,
+          title: (doc.title || doc.name || '') as string,
+          chunks: [],
+          total_chars: 0,
+          total_chunks: 0
+        };
+      }
+
+      // Chunk the text
+      let textChunks = this.chunkText(fullText, chunkSize);
+
+      // Apply max_chars budget if specified (0 = unlimited)
+      const maxChars = parameters.max_chars;
+      if (maxChars !== undefined && maxChars !== 0 && maxChars > 0) {
+        let charBudget = maxChars;
+        const budgeted: string[] = [];
+        for (const chunk of textChunks) {
+          if (charBudget <= 0) break;
+          if (chunk.length <= charBudget) {
+            budgeted.push(chunk);
+            charBudget -= chunk.length;
+          } else {
+            budgeted.push(chunk.slice(0, charBudget - 3) + '...');
+            charBudget = 0;
+          }
+        }
+        textChunks = budgeted;
+      }
+
+      const totalChunks = textChunks.length;
+      const chunks = textChunks.map((text, index) => ({
+        chunk_index: index,
+        total_chunks: totalChunks,
+        text,
+        char_count: text.length
+      }));
+
+      return {
+        success: true,
+        document_id: parameters.document_id,
+        document_type: doc._type as string,
+        title: (doc.title || doc.name || '') as string,
+        chunks,
+        total_chars: chunks.reduce((sum, c) => sum + c.char_count, 0),
+        total_chunks: totalChunks
+      };
+    } catch (error) {
+      logger.error('Error extracting document text:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
+      };
+    }
+  }
+
+  /**
+   * Tool: Retrieve context — the primary RAG tool.
+   * Searches for relevant content, fetches full documents, extracts and chunks text,
+   * and returns LLM-ready context blocks.
+   */
+  @tool({
+    name: 'retrieve_context',
+    description: 'Primary RAG tool. Searches Sanity content, fetches full documents, extracts text (including Portable Text), chunks it, and returns LLM-ready context blocks with relevance scores. Use this to gather context for answering questions about content.',
+    endpoint: '/tools/retrieve-context',
+    parameters: [
+      {
+        name: 'query',
+        type: ParameterType.String,
+        description: 'The search query or topic to find relevant content for',
+        required: true
+      },
+      {
+        name: 'document_types',
+        type: ParameterType.List,
+        description: 'Document types to search (e.g., ["post", "page"]). Defaults to configured default types or all types.',
+        required: false
+      },
+      {
+        name: 'max_results',
+        type: ParameterType.Number,
+        description: 'Maximum number of source documents to retrieve (1-20). Defaults to 5.',
+        required: false
+      },
+      {
+        name: 'max_chars',
+        type: ParameterType.Number,
+        description: 'Total character budget for all returned chunks combined. Defaults to chunk_size * max_results. Set to 0 for unlimited.',
+        required: false
+      },
+      {
+        name: 'include_metadata',
+        type: ParameterType.Boolean,
+        description: 'Whether to include document metadata (type, id, title, date) with each chunk. Defaults to true.',
+        required: false
+      }
+    ]
+  })
+  async retrieveContext(
+    parameters: {
+      query: string;
+      document_types?: string[];
+      max_results?: number;
+      max_chars?: number;
+      include_metadata?: boolean;
+    },
+    authData?: Record<string, unknown>
+  ): Promise<{
+    success: boolean;
+    chunks?: Array<{
+      document_id: string;
+      document_type: string;
+      title: string;
+      updated_at: string;
+      relevance_score: number;
+      chunk_index: number;
+      total_chunks: number;
+      text: string;
+      char_count: number;
+    }>;
+    total_chunks?: number;
+    total_chars?: number;
+    sources_used?: number;
+    query?: string;
+    error?: string;
+  }> {
+    try {
+      const client = await this.getSanityClient();
+      const ragSettings = await this.getRagSettings();
+      const contentSettings = await storage.settings.get('content_settings') as unknown as ContentSettings | null;
+      const chunkSize = parseInt(ragSettings.content_chunk_size || '1000', 10);
+      const maxResults = Math.min(parameters.max_results || 5, 20);
+      const includeMetadata = parameters.include_metadata !== false;
+
+      // Step 1: Search for relevant documents (reuse search_content GROQ pattern)
+      let typeFilter = '';
+      const types = parameters.document_types ||
+        (contentSettings?.default_document_types
+          ? contentSettings.default_document_types.split(',').map(t => t.trim())
+          : null);
+
+      if (types && types.length > 0) {
+        typeFilter = `_type in [${types.map(t => `"${t}"`).join(', ')}] && `;
+      }
+
+      const searchQuery = `*[${typeFilter}[title, name, body, description, content, text] match $searchTerm] | score(
+        boost([title, name] match $searchTerm, 3),
+        boost([description] match $searchTerm, 2),
+        [body, content, text] match $searchTerm
+      ) | order(_score desc) [0...${maxResults}] {
+        _id,
+        _type,
+        _score,
+        _updatedAt,
+        title,
+        name
+      }`;
+
+      const searchResults = await client.fetch(searchQuery, {
+        searchTerm: `*${parameters.query}*`
+      }) as Array<Record<string, unknown>>;
+
+      if (!searchResults || searchResults.length === 0) {
+        return {
+          success: true,
+          chunks: [],
+          total_chunks: 0,
+          total_chars: 0,
+          sources_used: 0,
+          query: parameters.query
+        };
+      }
+
+      // Step 2: Fetch full content for each result with pt::text extraction
+      const resultIds = searchResults.map(r => r._id as string);
+
+      // Sample first result to discover PT fields for projection
+      const sampleDoc = await client.getDocument(resultIds[0]) as Record<string, unknown>;
+      const projection = this.buildTextExtractionProjection(sampleDoc || {});
+
+      const fullDocs = await client.fetch(
+        `*[_id in $ids]${projection}`,
+        { ids: resultIds }
+      ) as Array<Record<string, unknown>>;
+
+      // Build a lookup of search metadata by _id
+      const searchMeta: Record<string, Record<string, unknown>> = {};
+      for (const result of searchResults) {
+        searchMeta[result._id as string] = result;
+      }
+
+      // Step 3: Extract text, chunk, and assemble context blocks
+      const allChunks: Array<{
+        document_id: string;
+        document_type: string;
+        title: string;
+        updated_at: string;
+        relevance_score: number;
+        chunk_index: number;
+        total_chunks: number;
+        text: string;
+        char_count: number;
+      }> = [];
+
+      const defaultMaxChars = chunkSize * maxResults;
+      const maxChars = parameters.max_chars !== undefined && parameters.max_chars !== 0
+        ? parameters.max_chars
+        : defaultMaxChars;
+      let charBudget = maxChars > 0 ? maxChars : Infinity;
+      const sourcesUsed = new Set<string>();
+
+      for (const doc of fullDocs) {
+        if (charBudget <= 0) break;
+
+        const docId = doc._id as string;
+        const meta = searchMeta[docId] || {};
+
+        // Separate pt::text fields
+        const ptTextFields: Record<string, string> = {};
+        for (const [key, value] of Object.entries(doc)) {
+          if (key.endsWith('Text') && typeof value === 'string') {
+            ptTextFields[key] = value;
+          }
+        }
+
+        // Extract and chunk text
+        const fullText = this.extractDocumentText(doc, ptTextFields);
+        if (!fullText) continue;
+
+        const textChunks = this.chunkText(fullText, chunkSize);
+        const docTitle = (meta.title || meta.name || doc.title || doc.name || '') as string;
+        const docType = (doc._type || '') as string;
+        const updatedAt = (meta._updatedAt || doc._updatedAt || '') as string;
+        const score = (meta._score || 0) as number;
+
+        for (let i = 0; i < textChunks.length; i++) {
+          if (charBudget <= 0) break;
+
+          let chunkText = textChunks[i];
+          if (chunkText.length > charBudget) {
+            chunkText = chunkText.slice(0, charBudget - 3) + '...';
+          }
+
+          // Prepend metadata header if requested
+          let text = chunkText;
+          if (includeMetadata && i === 0) {
+            const header = `[${docType}] ${docTitle} (ID: ${docId})`;
+            text = `${header}\n\n${chunkText}`;
+          }
+
+          allChunks.push({
+            document_id: docId,
+            document_type: docType,
+            title: docTitle,
+            updated_at: updatedAt,
+            relevance_score: score,
+            chunk_index: i,
+            total_chunks: textChunks.length,
+            text,
+            char_count: text.length
+          });
+
+          charBudget -= text.length;
+          sourcesUsed.add(docId);
+        }
+      }
+
+      return {
+        success: true,
+        chunks: allChunks,
+        total_chunks: allChunks.length,
+        total_chars: allChunks.reduce((sum, c) => sum + c.char_count, 0),
+        sources_used: sourcesUsed.size,
+        query: parameters.query
+      };
+    } catch (error) {
+      logger.error('Error retrieving context:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
+      };
+    }
+  }
+
+  /**
+   * Tool: Get a structured catalog of available content in Sanity
+   */
+  @tool({
+    name: 'get_content_catalog',
+    description: 'Returns a structured overview of content available in Sanity CMS — document types, counts, searchable fields, and sample content. Use this to understand what content exists before making retrieve_context or search_content calls.',
+    endpoint: '/tools/content-catalog',
+    parameters: [
+      {
+        name: 'document_type',
+        type: ParameterType.String,
+        description: 'Get detailed catalog for a specific type (e.g., "post"). If omitted, returns a summary of all types.',
+        required: false
+      },
+      {
+        name: 'include_samples',
+        type: ParameterType.Boolean,
+        description: 'Whether to include sample document titles/names. Defaults to true. Max 5 samples per type.',
+        required: false
+      }
+    ]
+  })
+  async getContentCatalog(
+    parameters: {
+      document_type?: string;
+      include_samples?: boolean;
+    },
+    authData?: Record<string, unknown>
+  ): Promise<{
+    success: boolean;
+    catalog?: {
+      total_documents: number;
+      total_types: number;
+      types: Array<{
+        type: string;
+        count: number;
+        searchable_fields: string[];
+        all_fields: Array<{ name: string; type: string }>;
+        samples?: Array<{ _id: string; title_or_name: string; updated_at: string }>;
+        date_range?: { earliest: string; latest: string };
+        avg_text_length?: number;
+      }>;
+    };
+    error?: string;
+  }> {
+    try {
+      const client = await this.getSanityClient();
+      const includeSamples = parameters.include_samples !== false;
+
+      if (parameters.document_type) {
+        // Detail mode for a specific type
+        const docType = parameters.document_type;
+        const count = await client.fetch(
+          `count(*[_type == $type])`,
+          { type: docType }
+        ) as number;
+
+        // Sample documents to discover fields
+        const samples = await client.fetch(
+          `*[_type == $type] | order(_updatedAt desc) [0...5]`,
+          { type: docType }
+        ) as Array<Record<string, unknown>>;
+
+        // Infer field types from samples
+        const fieldTypes: Record<string, string> = {};
+        for (const doc of samples) {
+          for (const [key, value] of Object.entries(doc)) {
+            if (!fieldTypes[key] || fieldTypes[key] === 'unknown') {
+              fieldTypes[key] = this.inferFieldType(value);
+            }
+          }
+        }
+
+        const allFields = Object.entries(fieldTypes)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, type]) => ({ name, type }));
+
+        // Identify searchable text fields
+        const textTypes = new Set(['string', 'portableText']);
+        const systemFields = new Set(['_id', '_type', '_rev', '_createdAt', '_updatedAt', '_key']);
+        const searchableFields = allFields
+          .filter(f => textTypes.has(f.type) && !systemFields.has(f.name))
+          .map(f => f.name);
+
+        // Date range
+        const dateRange = await client.fetch(
+          `{ "earliest": *[_type == $type] | order(_updatedAt asc)[0]._updatedAt, "latest": *[_type == $type] | order(_updatedAt desc)[0]._updatedAt }`,
+          { type: docType }
+        ) as { earliest: string; latest: string };
+
+        // Estimate avg text length from samples
+        let avgTextLength: number | undefined;
+        if (samples.length > 0) {
+          // Build projection for first sample to extract text
+          const projection = this.buildTextExtractionProjection(samples[0]);
+          const enrichedSamples = await client.fetch(
+            `*[_type == $type] | order(_updatedAt desc) [0...3]${projection}`,
+            { type: docType }
+          ) as Array<Record<string, unknown>>;
+
+          let totalLen = 0;
+          for (const doc of enrichedSamples) {
+            const ptTextFields: Record<string, string> = {};
+            for (const [key, value] of Object.entries(doc)) {
+              if (key.endsWith('Text') && typeof value === 'string') {
+                ptTextFields[key] = value;
+              }
+            }
+            totalLen += this.extractDocumentText(doc, ptTextFields).length;
+          }
+          avgTextLength = Math.round(totalLen / enrichedSamples.length);
+        }
+
+        // Build sample list
+        let sampleList: Array<{ _id: string; title_or_name: string; updated_at: string }> | undefined;
+        if (includeSamples && samples.length > 0) {
+          sampleList = samples.map(s => ({
+            _id: s._id as string,
+            title_or_name: (s.title || s.name || '(untitled)') as string,
+            updated_at: (s._updatedAt || '') as string
+          }));
+        }
+
+        return {
+          success: true,
+          catalog: {
+            total_documents: count,
+            total_types: 1,
+            types: [{
+              type: docType,
+              count,
+              searchable_fields: searchableFields,
+              all_fields: allFields,
+              samples: sampleList,
+              date_range: dateRange,
+              avg_text_length: avgTextLength
+            }]
+          }
+        };
+      }
+
+      // Summary mode — all types
+      // Get unique types with counts efficiently
+      const typeData = await client.fetch(
+        `*[!(_type match "system.*") && !(_type match "sanity.*")]._type`
+      ) as string[];
+
+      const typeCounts: Record<string, number> = {};
+      for (const t of typeData) {
+        typeCounts[t] = (typeCounts[t] || 0) + 1;
+      }
+
+      const totalDocuments = typeData.length;
+      const typeNames = Object.keys(typeCounts).sort();
+
+      const catalogTypes: Array<{
+        type: string;
+        count: number;
+        searchable_fields: string[];
+        all_fields: Array<{ name: string; type: string }>;
+        samples?: Array<{ _id: string; title_or_name: string; updated_at: string }>;
+        date_range?: { earliest: string; latest: string };
+      }> = [];
+
+      for (const typeName of typeNames) {
+        // Fetch one sample to discover fields
+        const sample = await client.fetch(
+          `*[_type == $type] | order(_updatedAt desc) [0]`,
+          { type: typeName }
+        ) as Record<string, unknown> | null;
+
+        const allFields: Array<{ name: string; type: string }> = [];
+        const searchableFields: string[] = [];
+        const textTypes = new Set(['string', 'portableText']);
+        const systemFields = new Set(['_id', '_type', '_rev', '_createdAt', '_updatedAt', '_key']);
+
+        if (sample) {
+          for (const [key, value] of Object.entries(sample)) {
+            const fieldType = this.inferFieldType(value);
+            allFields.push({ name: key, type: fieldType });
+            if (textTypes.has(fieldType) && !systemFields.has(key)) {
+              searchableFields.push(key);
+            }
+          }
+          allFields.sort((a, b) => a.name.localeCompare(b.name));
+        }
+
+        // Build sample list
+        let sampleList: Array<{ _id: string; title_or_name: string; updated_at: string }> | undefined;
+        if (includeSamples) {
+          const recentDocs = await client.fetch(
+            `*[_type == $type] | order(_updatedAt desc) [0...3] { _id, title, name, _updatedAt }`,
+            { type: typeName }
+          ) as Array<Record<string, unknown>>;
+
+          sampleList = recentDocs.map(d => ({
+            _id: d._id as string,
+            title_or_name: (d.title || d.name || '(untitled)') as string,
+            updated_at: (d._updatedAt || '') as string
+          }));
+        }
+
+        catalogTypes.push({
+          type: typeName,
+          count: typeCounts[typeName],
+          searchable_fields: searchableFields,
+          all_fields: allFields,
+          samples: sampleList
+        });
+      }
+
+      return {
+        success: true,
+        catalog: {
+          total_documents: totalDocuments,
+          total_types: typeNames.length,
+          types: catalogTypes
+        }
+      };
+    } catch (error) {
+      logger.error('Error building content catalog:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error occurred'

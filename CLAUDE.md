@@ -194,8 +194,12 @@ ocp directory upgrade                                                     # Upgr
 | `delete_document` | Delete documents |
 | `publish_document` | Publish draft documents |
 | `unpublish_document` | Unpublish documents to draft |
-| `search_content` | Full-text search for RAG |
+| `search_content` | Full-text search with text preview and custom field support |
 | `get_document_types` | List available document types |
+| `upload_asset` | Upload images/files from base64 data |
+| `get_document_text` | Extract chunked plain text from a specific document |
+| `retrieve_context` | RAG: search, extract, and chunk content for LLM context |
+| `get_content_catalog` | Discover available content types, fields, and samples |
 
 ## Resources
 - [Sanity Documentation](https://www.sanity.io/docs)
